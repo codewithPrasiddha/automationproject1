@@ -49,6 +49,7 @@ jobs:
       run: |
         git config user.name "Prasiddha Thapaliya"
         git config user.email "pthapaliya@myseneca.ca"
+        git remote set-url origin https://x-access-token:${GH_PAT}@github.com/codewithPrasiddha/automationproject1.git
         git add README.md
         git commit -m "${{ steps.vars.outputs.commit_message }}" || echo "Nothing to commit"
         git push

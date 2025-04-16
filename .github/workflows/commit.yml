@@ -44,6 +44,8 @@ jobs:
         echo "" >> README.md
 
     - name: Commit and push
+      env:
+        GH_PAT: ${{ secrets.GH_PAT }}
       run: |
         git config user.name "Prasiddha Thapaliya"
         git config user.email "pthapaliya@myseneca.ca"

@@ -1,0 +1,52 @@
+name: Daily Natural Commits
+
+on:
+  schedule:
+    - cron: '0 11 * * *'   # 7 AM Toronto
+    - cron: '0 17 * * *'   # 1 PM Toronto
+    - cron: '0 0 * * *'    # 8 PM Toronto
+  workflow_dispatch:
+
+jobs:
+  auto-commit:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Generate random commit message
+      id: vars
+      run: |
+        messages=(
+          "Minor updates and cleanup"
+          "Improved formatting in log"
+          "Added today's activity"
+          "Daily sync 🌿"
+          "Routine maintenance commit"
+          "Refreshed content for the day"
+          "Synced logs with new entry"
+          "Updated auto-generated content"
+          "New log entry 🕒"
+        )
+        RANDOM_INDEX=$((RANDOM % ${#messages[@]}))
+        echo "commit_message=${messages[$RANDOM_INDEX]}" >> $GITHUB_OUTPUT
+
+    - name: Update README.md
+      run: |
+        echo "## 🗓️ Daily GitHub Activity Log" > README.md
+        echo "" >> README.md
+        echo "> 🤖 Auto-updated log to keep the contribution streak alive!" >> README.md
+        echo "" >> README.md
+        echo "### ✅ Commits" >> README.md
+        echo "" >> README.md
+        echo "- 🕒 $(date -u +"%Y-%m-%d %H:%M UTC") — ${{ steps.vars.outputs.commit_message }}" >> README.md
+        echo "" >> README.md
+
+    - name: Commit and push
+      run: |
+        git config user.name "Prasiddha Thapaliya"
+        git config user.email "pthapaliya@myseneca.ca"
+        git add README.md
+        git commit -m "${{ steps.vars.outputs.commit_message }}" || echo "Nothing to commit"
+        git push

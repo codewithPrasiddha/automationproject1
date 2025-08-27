@@ -1,4 +1,4 @@
-name: Daily Natural Commits
+name: Smart Daily (Non-farmy)
 
 on:
   schedule:
@@ -8,48 +8,186 @@ on:
   workflow_dispatch:
 
 jobs:
-  auto-commit:
+  smart-maintenance:
     runs-on: ubuntu-latest
+    env:
+      TZ: America/Toronto
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
+      - name: Random jitter and skip gate
+        id: gate
+        run: |
+          # 0–1800s (0–30 min) jitter so runs are not on-the-dot
+          JITTER=$(( RANDOM % 1801 ))
+          echo "Sleeping ${JITTER}s for jitter..."
+          sleep $JITTER
 
-    - name: Generate random commit message
-      id: vars
-      run: |
-        messages=(
-          "Minor updates and cleanup"
-          "Improved formatting in log"
-          "Added today's activity"
-          "Daily sync 🌿"
-          "Routine maintenance commit"
-          "Refreshed content for the day"
-          "Synced logs with new entry"
-          "Updated auto-generated content"
-          "New log entry 🕒"
-        )
-        RANDOM_INDEX=$((RANDOM % ${#messages[@]}))
-        echo "commit_message=${messages[$RANDOM_INDEX]}" >> $GITHUB_OUTPUT
+          # ~60% chance to skip entirely (no commit)
+          R=$(( RANDOM % 100 ))
+          if [ "$R" -lt 60 ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "Skipping this run to keep activity natural."
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
 
-    - name: Update README.md
-      run: |
-        echo "## 🗓️ Daily GitHub Activity Log" > README.md
-        echo "" >> README.md
-        echo "> 🤖 Auto-updated log to keep the contribution streak alive!" >> README.md
-        echo "" >> README.md
-        echo "### ✅ Commits" >> README.md
-        echo "" >> README.md
-        echo "- 🕒 $(date -u +"%Y-%m-%d %H:%M UTC") — ${{ steps.vars.outputs.commit_message }}" >> README.md
-        echo "" >> README.md
+      - name: Checkout
+        if: steps.gate.outputs.skip == 'false'
+        uses: actions/checkout@v4
 
-    - name: Commit and push
-      env:
-        GH_PAT: ${{ secrets.GH_PAT }}
-      run: |
-        git config user.name "Prasiddha Thapaliya"
-        git config user.email "pthapaliya@myseneca.ca"
-        git remote set-url origin https://x-access-token:${GH_PAT}@github.com/codewithPrasiddha/automationproject1.git
-        git add README.md
-        git commit -m "${{ steps.vars.outputs.commit_message }}" || echo "Nothing to commit"
-        git push origin main
+      - name: Set up tooling (Node + Python)
+        if: steps.gate.outputs.skip == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - if: steps.gate.outputs.skip == 'false'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install utilities
+        if: steps.gate.outputs.skip == 'false'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq
+          npm i -g markdown-link-check
+          python -m pip install --upgrade pip
+          pip install codespell
+
+      - name: Ensure README and markers exist
+        if: steps.gate.outputs.skip == 'false'
+        run: |
+          if [ ! -f README.md ]; then
+            cat > README.md <<'EOF'
+# automationproject1
+
+This repository is automatically maintained by a GitHub Actions workflow.
+
+<!--AUTO:START-->
+<!--AUTO:END-->
+EOF
+          fi
+          # Insert markers if missing (won't duplicate)
+          if ! grep -q "<!--AUTO:START-->" README.md; then
+            printf "\n<!--AUTO:START-->\n<!--AUTO:END-->\n" >> README.md
+          fi
+
+      - name: Pick one useful task
+        if: steps.gate.outputs.skip == 'false'
+        id: pick
+        run: |
+          tasks=("linkcheck" "spellcheck" "repometrics")
+          PICK=${tasks[$((RANDOM % ${#tasks[@]}))]}
+          echo "task=$PICK" >> $GITHUB_OUTPUT
+          echo "Picked task: $PICK"
+
+      - name: Run link check on README (summary only)
+        if: steps.pick.outputs.task == 'linkcheck'
+        id: t1
+        run: |
+          TMP_OUT="$(mktemp)"
+          # Quiet mode output still lists broken links
+          markdown-link-check -q README.md > "$TMP_OUT" || true
+
+          BROKEN=$(grep -c "✖" "$TMP_OUT" || true)
+          BROKEN=${BROKEN:-0}
+          # Take up to 3 broken link lines for context
+          SUMMARY=$(grep "✖" "$TMP_OUT" | head -n 3 | sed 's/^/- /')
+
+          DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
+          NEW_SECTION=$'### 🔗 Link Check\n'"- When: ${DATE}\n- Broken links found: ${BROKEN}\n"
+          if [ -n "$SUMMARY" ]; then
+            NEW_SECTION+=$'\nTop issues:\n'"${SUMMARY}"$'\n'
+          fi
+
+          awk -v repl="$NEW_SECTION" '
+            BEGIN{printed=0}
+            /<!--AUTO:START-->/ {print; print repl; skip=1; next}
+            /<!--AUTO:END-->/ {skip=0}
+            skip!=1 {print}
+          ' README.md > README.md.new && mv README.md.new README.md
+
+      - name: Run spellcheck on README (summary only)
+        if: steps.pick.outputs.task == 'spellcheck'
+        id: t2
+        run: |
+          TMP_OUT="$(mktemp)"
+          # Ignore common generated/lock/minified files (not relevant here)
+          set +e
+          codespell -q 3 README.md > "$TMP_OUT"
+          EXIT=$?
+          set -e
+          COUNT=$(wc -l < "$TMP_OUT" | tr -d ' ')
+          COUNT=${COUNT:-0}
+          SAMPLE=$(head -n 5 "$TMP_OUT" | sed 's/^/- /')
+
+          DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
+          NEW_SECTION=$'### ✍️ Spellcheck\n'"- When: ${DATE}\n- Findings: ${COUNT}\n"
+          if [ "$COUNT" -gt 0 ]; then
+            NEW_SECTION+=$'\nSamples:\n'"${SAMPLE}"$'\n'
+          fi
+
+          awk -v repl="$NEW_SECTION" '
+            BEGIN{printed=0}
+            /<!--AUTO:START-->/ {print; print repl; skip=1; next}
+            /<!--AUTO:END-->/ {skip=0}
+            skip!=1 {print}
+          ' README.md > README.md.new && mv README.md.new README.md
+
+      - name: Update repo metrics (stars, forks, issues, last push)
+        if: steps.pick.outputs.task == 'repometrics'
+        id: t3
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          API="https://api.github.com/repos/${GITHUB_REPOSITORY}"
+          JSON=$(curl -sS -H "Authorization: token ${GH_PAT}" -H "Accept: application/vnd.github+json" "$API")
+          STARS=$(echo "$JSON" | jq -r '.stargazers_count')
+          FORKS=$(echo "$JSON" | jq -r '.forks_count')
+          ISSUES=$(echo "$JSON" | jq -r '.open_issues_count')
+          PUSHED=$(echo "$JSON" | jq -r '.pushed_at')
+
+          DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
+          NEW_SECTION=$'### 📊 Repo Metrics\n'"- When: ${DATE}\n- ⭐ Stars: ${STARS}\n- 🍴 Forks: ${FORKS}\n- 🐛 Open issues: ${ISSUES}\n- ⏱️ Last push (UTC): ${PUSHED}\n"
+
+          awk -v repl="$NEW_SECTION" '
+            BEGIN{printed=0}
+            /<!--AUTO:START-->/ {print; print repl; skip=1; next}
+            /<!--AUTO:END-->/ {skip=0}
+            skip!=1 {print}
+          ' README.md > README.md.new && mv README.md.new README.md
+
+      - name: Detect actual changes
+        if: steps.gate.outputs.skip == 'false'
+        id: diff
+        run: |
+          git status --porcelain
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Commit and push (only if changed)
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          git config user.name "Prasiddha Thapaliya"
+          git config user.email "pthapaliya@myseneca.ca"
+          git remote set-url origin https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}.git
+          git add README.md
+
+          case "${{ steps.pick.outputs.task }}" in
+            linkcheck)  MSG="Docs: refresh README link-check summary" ;;
+            spellcheck) MSG="Docs: update README spellcheck summary" ;;
+            repometrics)MSG="Chore: refresh repo metrics in README" ;;
+            *)          MSG="Automated maintenance update" ;;
+          esac
+
+          git commit -m "$MSG" || echo "Nothing to commit"
+          git push origin HEAD:main
+
+      - name: No changes — end quietly
+        if: steps.diff.outputs.changed != 'true'
+        run: echo "No diff; not committing."

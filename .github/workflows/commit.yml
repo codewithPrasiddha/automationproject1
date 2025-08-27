@@ -18,7 +18,7 @@ jobs:
         id: gate
         shell: bash
         run: |
-          JITTER=$(( RANDOM % 1801 )) # 0–30 min
+          JITTER=$(( RANDOM % 1801 ))  # 0–30 min
           echo "Sleeping ${JITTER}s for jitter..."
           sleep "$JITTER"
           R=$(( RANDOM % 100 ))
@@ -93,15 +93,25 @@ EOF
           BROKEN=$(grep -c "✖" "$TMP_OUT" || true); BROKEN=${BROKEN:-0}
           SUMMARY=$(grep "✖" "$TMP_OUT" | head -n 3 | sed 's/^/- /')
           DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
-          NEW_SECTION=$'### 🔗 Link Check\n'"- When: ${DATE}\n- Broken links found: ${BROKEN}\n"
-          if [ -n "$SUMMARY" ]; then
-            NEW_SECTION+=$'\nTop issues:\n'"${SUMMARY}"$'\n'
-          fi
-          awk -v repl="$NEW_SECTION" '
-            /<!--AUTO:START-->/ {print; print repl; skip=1; next}
-            /<!--AUTO:END-->/   {skip=0}
-            skip!=1 {print}
-          ' README.md > README.md.new && mv README.md.new README.md
+
+          python - <<'PY'
+import io,sys,re,datetime,os
+date=os.environ.get("DATE","")
+broken=os.environ.get("BROKEN","0")
+summary=os.environ.get("SUMMARY","").strip()
+block = "### Link Check\n- When: %s\n- Broken links found: %s\n" % (date, broken)
+if summary:
+    block += "\nTop issues:\n%s\n" % summary
+with io.open("README.md","r",encoding="utf-8") as f:
+    txt=f.read()
+start="<!--AUTO:START-->"
+end="<!--AUTO:END-->"
+new = re.sub(rf"{re.escape(start)}.*?{re.escape(end)}",
+             start + "\n" + block + end,
+             txt, flags=re.S)
+with io.open("README.md","w",encoding="utf-8") as f:
+    f.write(new)
+PY
 
       - name: Run spellcheck on README (summary only)
         if: steps.pick.outputs.task == 'spellcheck'
@@ -115,15 +125,25 @@ EOF
           COUNT=$(wc -l < "$TMP_OUT" | tr -d ' '); COUNT=${COUNT:-0}
           SAMPLE=$(head -n 5 "$TMP_OUT" | sed 's/^/- /')
           DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
-          NEW_SECTION=$'### ✍️ Spellcheck\n'"- When: ${DATE}\n- Findings: ${COUNT}\n"
-          if [ "$COUNT" -gt 0 ]; then
-            NEW_SECTION+=$'\nSamples:\n'"${SAMPLE}"$'\n'
-          fi
-          awk -v repl="$NEW_SECTION" '
-            /<!--AUTO:START-->/ {print; print repl; skip=1; next}
-            /<!--AUTO:END-->/   {skip=0}
-            skip!=1 {print}
-          ' README.md > README.md.new && mv README.md.new README.md
+
+          python - <<'PY'
+import io,sys,re,os
+date=os.environ.get("DATE","")
+count=os.environ.get("COUNT","0")
+sample=os.environ.get("SAMPLE","").strip()
+block = "### Spellcheck\n- When: %s\n- Findings: %s\n" % (date, count)
+if sample:
+    block += "\nSamples:\n%s\n" % sample
+with io.open("README.md","r",encoding="utf-8") as f:
+    txt=f.read()
+start="<!--AUTO:START-->"
+end="<!--AUTO:END-->"
+new = re.sub(rf"{re.escape(start)}.*?{re.escape(end)}",
+             start + "\n" + block + end,
+             txt, flags=re.S)
+with io.open("README.md","w",encoding="utf-8") as f:
+    f.write(new)
+PY
 
       - name: Update repo metrics (stars, forks, issues, last push)
         if: steps.pick.outputs.task == 'repometrics'
@@ -139,12 +159,30 @@ EOF
           ISSUES=$(echo "$JSON" | jq -r '.open_issues_count')
           PUSHED=$(echo "$JSON" | jq -r '.pushed_at')
           DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
-          NEW_SECTION=$'### 📊 Repo Metrics\n'"- When: ${DATE}\n- ⭐ Stars: ${STARS}\n- 🍴 Forks: ${FORKS}\n- 🐛 Open issues: ${ISSUES}\n- ⏱️ Last push (UTC): ${PUSHED}\n"
-          awk -v repl="$NEW_SECTION" '
-            /<!--AUTO:START-->/ {print; print repl; skip=1; next}
-            /<!--AUTO:END-->/   {skip=0}
-            skip!=1 {print}
-          ' README.md > README.md.new && mv README.md.new README.md
+
+          python - <<'PY'
+import io,sys,re,os
+date=os.environ["DATE"]
+stars=os.environ["STARS"]
+forks=os.environ["FORKS"]
+issues=os.environ["ISSUES"]
+pushed=os.environ["PUSHED"]
+block = ("### Repo Metrics\n"
+         f"- When: {date}\n"
+         f"- Stars: {stars}\n"
+         f"- Forks: {forks}\n"
+         f"- Open issues: {issues}\n"
+         f"- Last push (UTC): {pushed}\n")
+with io.open("README.md","r",encoding="utf-8") as f:
+    txt=f.read()
+start="<!--AUTO:START-->"
+end="<!--AUTO:END-->"
+new = re.sub(rf"{re.escape(start)}.*?{re.escape(end)}",
+             start + "\n" + block + end,
+             txt, flags=re.S)
+with io.open("README.md","w",encoding="utf-8") as f:
+    f.write(new)
+PY
 
       - name: Detect actual changes
         if: steps.gate.outputs.skip == 'false'
@@ -167,12 +205,11 @@ EOF
           git config user.email "pthapaliya@myseneca.ca"
           git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}.git"
           git add README.md
-          case "${{ steps.pick.outputs.task }}" in
-            linkcheck)  MSG="Docs: refresh README link-check summary" ;;
-            spellcheck) MSG="Docs: update README spellcheck summary" ;;
-            repometrics)MSG="Chore: refresh repo metrics in README" ;;
-            *)          MSG="Automated maintenance update" ;;
-          esac
+          TASK="${{ steps.pick.outputs.task }}"
+          if [ "$TASK" = "linkcheck" ]; then MSG="Docs: refresh README link-check summary"
+          elif [ "$TASK" = "spellcheck" ]; then MSG="Docs: update README spellcheck summary"
+          else MSG="Chore: refresh repo metrics in README"
+          fi
           git commit -m "$MSG" || true
           if git rev-parse --verify main >/dev/null 2>&1; then
             git push origin HEAD:main
@@ -182,4 +219,5 @@ EOF
 
       - name: No changes — end quietly
         if: steps.diff.outputs.changed != 'true'
+        shell: bash
         run: echo "No diff; not committing."

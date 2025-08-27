@@ -16,7 +16,6 @@ jobs:
     steps:
       - name: Random jitter and skip gate
         id: gate
-        shell: bash
         run: |
           JITTER=$(( RANDOM % 1801 ))  # 0–30 min
           echo "Sleeping ${JITTER}s for jitter..."
@@ -24,7 +23,6 @@ jobs:
           R=$(( RANDOM % 100 ))
           if [ "$R" -lt 60 ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Skipping this run to keep activity natural."
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
@@ -47,7 +45,6 @@ jobs:
 
       - name: Install utilities
         if: steps.gate.outputs.skip == 'false'
-        shell: bash
         run: |
           sudo apt-get update -y
           sudo apt-get install -y jq
@@ -57,17 +54,14 @@ jobs:
 
       - name: Ensure README and markers exist
         if: steps.gate.outputs.skip == 'false'
-        shell: bash
         run: |
           if [ ! -f README.md ]; then
-            cat > README.md <<'EOF'
-# automationproject1
-
-This repository is automatically maintained by a GitHub Actions workflow.
-
-<!--AUTO:START-->
-<!--AUTO:END-->
-EOF
+            echo "# automationproject1" > README.md
+            echo "" >> README.md
+            echo "Auto-maintained by GitHub Actions." >> README.md
+            echo "" >> README.md
+            echo "<!--AUTO:START-->" >> README.md
+            echo "<!--AUTO:END-->" >> README.md
           fi
           if ! grep -q "<!--AUTO:START-->" README.md; then
             printf "\n<!--AUTO:START-->\n<!--AUTO:END-->\n" >> README.md
@@ -76,81 +70,47 @@ EOF
       - name: Pick one useful task
         if: steps.gate.outputs.skip == 'false'
         id: pick
-        shell: bash
         run: |
           tasks=("linkcheck" "spellcheck" "repometrics")
           PICK=${tasks[$((RANDOM % ${#tasks[@]}))]}
           echo "task=$PICK" >> "$GITHUB_OUTPUT"
-          echo "Picked task: $PICK"
 
-      - name: Run link check on README (summary only)
+      - name: Run link check
         if: steps.pick.outputs.task == 'linkcheck'
-        id: t1
-        shell: bash
         run: |
           TMP_OUT="$(mktemp)"
           markdown-link-check -q README.md > "$TMP_OUT" || true
-          BROKEN=$(grep -c "✖" "$TMP_OUT" || true); BROKEN=${BROKEN:-0}
+          BROKEN=$(grep -c "✖" "$TMP_OUT" || true)
           SUMMARY=$(grep "✖" "$TMP_OUT" | head -n 3 | sed 's/^/- /')
           DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
+          NEW="### 🔗 Link Check\n- When: $DATE\n- Broken links: $BROKEN\n$SUMMARY"
+          awk -v repl="$NEW" '
+            /<!--AUTO:START-->/ {print; print repl; skip=1; next}
+            /<!--AUTO:END-->/   {skip=0}
+            skip!=1 {print}
+          ' README.md > README.tmp && mv README.tmp README.md
 
-          python - <<'PY'
-import io,sys,re,datetime,os
-date=os.environ.get("DATE","")
-broken=os.environ.get("BROKEN","0")
-summary=os.environ.get("SUMMARY","").strip()
-block = "### Link Check\n- When: %s\n- Broken links found: %s\n" % (date, broken)
-if summary:
-    block += "\nTop issues:\n%s\n" % summary
-with io.open("README.md","r",encoding="utf-8") as f:
-    txt=f.read()
-start="<!--AUTO:START-->"
-end="<!--AUTO:END-->"
-new = re.sub(rf"{re.escape(start)}.*?{re.escape(end)}",
-             start + "\n" + block + end,
-             txt, flags=re.S)
-with io.open("README.md","w",encoding="utf-8") as f:
-    f.write(new)
-PY
-
-      - name: Run spellcheck on README (summary only)
+      - name: Run spellcheck
         if: steps.pick.outputs.task == 'spellcheck'
-        id: t2
-        shell: bash
         run: |
           TMP_OUT="$(mktemp)"
           set +e
           codespell -q 3 README.md > "$TMP_OUT"
           set -e
-          COUNT=$(wc -l < "$TMP_OUT" | tr -d ' '); COUNT=${COUNT:-0}
+          COUNT=$(wc -l < "$TMP_OUT" | tr -d ' ')
           SAMPLE=$(head -n 5 "$TMP_OUT" | sed 's/^/- /')
           DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
+          NEW="### ✍️ Spellcheck\n- When: $DATE\n- Findings: $COUNT\n$SAMPLE"
+          awk -v repl="$NEW" '
+            /<!--AUTO:START-->/ {print; print repl; skip=1; next}
+            /<!--AUTO:END-->/   {skip=0}
+            skip!=1 {print}
+          ' README.md > README.tmp && mv README.tmp README.md
 
-          python - <<'PY'
-import io,sys,re,os
-date=os.environ.get("DATE","")
-count=os.environ.get("COUNT","0")
-sample=os.environ.get("SAMPLE","").strip()
-block = "### Spellcheck\n- When: %s\n- Findings: %s\n" % (date, count)
-if sample:
-    block += "\nSamples:\n%s\n" % sample
-with io.open("README.md","r",encoding="utf-8") as f:
-    txt=f.read()
-start="<!--AUTO:START-->"
-end="<!--AUTO:END-->"
-new = re.sub(rf"{re.escape(start)}.*?{re.escape(end)}",
-             start + "\n" + block + end,
-             txt, flags=re.S)
-with io.open("README.md","w",encoding="utf-8") as f:
-    f.write(new)
-PY
-
-      - name: Update repo metrics (stars, forks, issues, last push)
+      - name: Repo metrics
         if: steps.pick.outputs.task == 'repometrics'
-        id: t3
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
-        shell: bash
         run: |
           API="https://api.github.com/repos/${GITHUB_REPOSITORY}"
           JSON=$(curl -sS -H "Authorization: token ${GH_PAT}" -H "Accept: application/vnd.github+json" "$API")
@@ -159,35 +119,16 @@ PY
           ISSUES=$(echo "$JSON" | jq -r '.open_issues_count')
           PUSHED=$(echo "$JSON" | jq -r '.pushed_at')
           DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
-
-          python - <<'PY'
-import io,sys,re,os
-date=os.environ["DATE"]
-stars=os.environ["STARS"]
-forks=os.environ["FORKS"]
-issues=os.environ["ISSUES"]
-pushed=os.environ["PUSHED"]
-block = ("### Repo Metrics\n"
-         f"- When: {date}\n"
-         f"- Stars: {stars}\n"
-         f"- Forks: {forks}\n"
-         f"- Open issues: {issues}\n"
-         f"- Last push (UTC): {pushed}\n")
-with io.open("README.md","r",encoding="utf-8") as f:
-    txt=f.read()
-start="<!--AUTO:START-->"
-end="<!--AUTO:END-->"
-new = re.sub(rf"{re.escape(start)}.*?{re.escape(end)}",
-             start + "\n" + block + end,
-             txt, flags=re.S)
-with io.open("README.md","w",encoding="utf-8") as f:
-    f.write(new)
-PY
+          NEW="### 📊 Repo Metrics\n- When: $DATE\n- ⭐ Stars: $STARS\n- 🍴 Forks: $FORKS\n- 🐛 Issues: $ISSUES\n- ⏱️ Last push: $PUSHED"
+          awk -v repl="$NEW" '
+            /<!--AUTO:START-->/ {print; print repl; skip=1; next}
+            /<!--AUTO:END-->/   {skip=0}
+            skip!=1 {print}
+          ' README.md > README.tmp && mv README.tmp README.md
 
       - name: Detect actual changes
         if: steps.gate.outputs.skip == 'false'
         id: diff
-        shell: bash
         run: |
           if [ -z "$(git status --porcelain)" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -195,29 +136,23 @@ PY
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Commit and push (only if changed)
+      - name: Commit and push
         if: steps.diff.outputs.changed == 'true'
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
-        shell: bash
         run: |
           git config user.name "Prasiddha Thapaliya"
           git config user.email "pthapaliya@myseneca.ca"
           git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}.git"
           git add README.md
-          TASK="${{ steps.pick.outputs.task }}"
-          if [ "$TASK" = "linkcheck" ]; then MSG="Docs: refresh README link-check summary"
-          elif [ "$TASK" = "spellcheck" ]; then MSG="Docs: update README spellcheck summary"
-          else MSG="Chore: refresh repo metrics in README"
-          fi
+          case "${{ steps.pick.outputs.task }}" in
+            linkcheck)  MSG="Docs: refresh README link-check" ;;
+            spellcheck) MSG="Docs: update README spellcheck" ;;
+            repometrics)MSG="Chore: refresh repo metrics in README" ;;
+          esac
           git commit -m "$MSG" || true
-          if git rev-parse --verify main >/dev/null 2>&1; then
-            git push origin HEAD:main
-          else
-            git push origin HEAD
-          fi
+          git push origin HEAD:main
 
-      - name: No changes — end quietly
+      - name: No changes
         if: steps.diff.outputs.changed != 'true'
-        shell: bash
         run: echo "No diff; not committing."

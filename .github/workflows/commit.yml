@@ -1,4 +1,4 @@
-name: Smart Daily (Non-farmy)
+name: Daily Natural Commits
 
 on:
   schedule:
@@ -8,151 +8,48 @@ on:
   workflow_dispatch:
 
 jobs:
-  smart-maintenance:
+  auto-commit:
     runs-on: ubuntu-latest
-    env:
-      TZ: America/Toronto
 
     steps:
-      - name: Random jitter and skip gate
-        id: gate
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Generate random commit message
+        id: vars
         run: |
-          JITTER=$(( RANDOM % 1801 ))  # 0–30 min
-          echo "Sleeping ${JITTER}s for jitter..."
-          sleep "$JITTER"
-          R=$(( RANDOM % 100 ))
-          if [ "$R" -lt 60 ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
+          messages=(
+            "Minor updates and cleanup"
+            "Improved formatting in log"
+            "Added today's activity"
+            "Daily sync 🌿"
+            "Routine maintenance commit"
+            "Refreshed content for the day"
+            "Synced logs with new entry"
+            "Updated auto-generated content"
+            "New log entry 🕒"
+          )
+          RANDOM_INDEX=$((RANDOM % ${#messages[@]}))
+          echo "commit_message=${messages[$RANDOM_INDEX]}" >> $GITHUB_OUTPUT
 
-      - name: Checkout
-        if: steps.gate.outputs.skip == 'false'
-        uses: actions/checkout@v4
-
-      - name: Set up Node
-        if: steps.gate.outputs.skip == 'false'
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Set up Python
-        if: steps.gate.outputs.skip == 'false'
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install utilities
-        if: steps.gate.outputs.skip == 'false'
+      - name: Update README.md
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y jq
-          npm i -g markdown-link-check
-          python -m pip install --upgrade pip
-          pip install codespell
-
-      - name: Ensure README and markers exist
-        if: steps.gate.outputs.skip == 'false'
-        run: |
-          if [ ! -f README.md ]; then
-            echo "# automationproject1" > README.md
-            echo "" >> README.md
-            echo "Auto-maintained by GitHub Actions." >> README.md
-            echo "" >> README.md
-            echo "<!--AUTO:START-->" >> README.md
-            echo "<!--AUTO:END-->" >> README.md
-          fi
-          if ! grep -q "<!--AUTO:START-->" README.md; then
-            printf "\n<!--AUTO:START-->\n<!--AUTO:END-->\n" >> README.md
-          fi
-
-      - name: Pick one useful task
-        if: steps.gate.outputs.skip == 'false'
-        id: pick
-        run: |
-          tasks=("linkcheck" "spellcheck" "repometrics")
-          PICK=${tasks[$((RANDOM % ${#tasks[@]}))]}
-          echo "task=$PICK" >> "$GITHUB_OUTPUT"
-
-      - name: Run link check
-        if: steps.pick.outputs.task == 'linkcheck'
-        run: |
-          TMP_OUT="$(mktemp)"
-          markdown-link-check -q README.md > "$TMP_OUT" || true
-          BROKEN=$(grep -c "✖" "$TMP_OUT" || true)
-          SUMMARY=$(grep "✖" "$TMP_OUT" | head -n 3 | sed 's/^/- /')
-          DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
-          NEW="### 🔗 Link Check\n- When: $DATE\n- Broken links: $BROKEN\n$SUMMARY"
-          awk -v repl="$NEW" '
-            /<!--AUTO:START-->/ {print; print repl; skip=1; next}
-            /<!--AUTO:END-->/   {skip=0}
-            skip!=1 {print}
-          ' README.md > README.tmp && mv README.tmp README.md
-
-      - name: Run spellcheck
-        if: steps.pick.outputs.task == 'spellcheck'
-        run: |
-          TMP_OUT="$(mktemp)"
-          set +e
-          codespell -q 3 README.md > "$TMP_OUT"
-          set -e
-          COUNT=$(wc -l < "$TMP_OUT" | tr -d ' ')
-          SAMPLE=$(head -n 5 "$TMP_OUT" | sed 's/^/- /')
-          DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
-          NEW="### ✍️ Spellcheck\n- When: $DATE\n- Findings: $COUNT\n$SAMPLE"
-          awk -v repl="$NEW" '
-            /<!--AUTO:START-->/ {print; print repl; skip=1; next}
-            /<!--AUTO:END-->/   {skip=0}
-            skip!=1 {print}
-          ' README.md > README.tmp && mv README.tmp README.md
-
-      - name: Repo metrics
-        if: steps.pick.outputs.task == 'repometrics'
-        env:
-          GH_PAT: ${{ secrets.GH_PAT }}
-        run: |
-          API="https://api.github.com/repos/${GITHUB_REPOSITORY}"
-          JSON=$(curl -sS -H "Authorization: token ${GH_PAT}" -H "Accept: application/vnd.github+json" "$API")
-          STARS=$(echo "$JSON" | jq -r '.stargazers_count')
-          FORKS=$(echo "$JSON" | jq -r '.forks_count')
-          ISSUES=$(echo "$JSON" | jq -r '.open_issues_count')
-          PUSHED=$(echo "$JSON" | jq -r '.pushed_at')
-          DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
-          NEW="### 📊 Repo Metrics\n- When: $DATE\n- ⭐ Stars: $STARS\n- 🍴 Forks: $FORKS\n- 🐛 Issues: $ISSUES\n- ⏱️ Last push: $PUSHED"
-          awk -v repl="$NEW" '
-            /<!--AUTO:START-->/ {print; print repl; skip=1; next}
-            /<!--AUTO:END-->/   {skip=0}
-            skip!=1 {print}
-          ' README.md > README.tmp && mv README.tmp README.md
-
-      - name: Detect actual changes
-        if: steps.gate.outputs.skip == 'false'
-        id: diff
-        run: |
-          if [ -z "$(git status --porcelain)" ]; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
+          echo "## 🗓️ Daily GitHub Activity Log" > README.md
+          echo "" >> README.md
+          echo "> 🤖 Auto-updated log to keep the contribution streak alive!" >> README.md
+          echo "" >> README.md
+          echo "### ✅ Commits" >> README.md
+          echo "" >> README.md
+          echo "- 🕒 $(date -u +"%Y-%m-%d %H:%M UTC") — ${{ steps.vars.outputs.commit_message }}" >> README.md
+          echo "" >> README.md
 
       - name: Commit and push
-        if: steps.diff.outputs.changed == 'true'
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
         run: |
           git config user.name "Prasiddha Thapaliya"
           git config user.email "pthapaliya@myseneca.ca"
-          git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}.git"
+          git remote set-url origin https://x-access-token:${GH_PAT}@github.com/codewithPrasiddha/automationproject1.git
           git add README.md
-          case "${{ steps.pick.outputs.task }}" in
-            linkcheck)  MSG="Docs: refresh README link-check" ;;
-            spellcheck) MSG="Docs: update README spellcheck" ;;
-            repometrics)MSG="Chore: refresh repo metrics in README" ;;
-          esac
-          git commit -m "$MSG" || true
-          git push origin HEAD:main
-
-      - name: No changes
-        if: steps.diff.outputs.changed != 'true'
-        run: echo "No diff; not committing."
+          git commit -m "${{ steps.vars.outputs.commit_message }}" || echo "Nothing to commit"
+          git push origin main
